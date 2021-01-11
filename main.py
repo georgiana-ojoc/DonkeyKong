@@ -11,7 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-env = retro.make(game='DonkeyKong-Nes')
+import os
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -72,7 +73,7 @@ class ReplayBuffer:
 # aici putem si cred ca va trebui sa ne jucam cu size-ul layerelor de convolutie
 # numerele 12 si 13 sunt produse de 224/16 si 240/16 rezultate in urma pooling-ului de 4 (efectuat de doua ori)
 class Q_Module(nn.Module):
-    def __init__(self, state_n, action_n):
+    def __init__(self):
         super(Q_Module, self).__init__()
         self.conv1 = nn.Conv2d(1, 6, 5)
         self.pool = nn.MaxPool2d(4, 4)
@@ -93,15 +94,11 @@ class Q_Module(nn.Module):
 
 # Trebuie sa modificam actiunile de output daca dorim sa facemproblema mai mica
 class DQNAgent(object):
-    def __init__(self, env):
-
-        self.env = env
-
-        action_n = env.action_space.shape[0]
-        state_n = env.observation_space.shape
+    def __init__(self):
+        self.env = None
 
         # Actor and target Actor using Adam optimizer
-        self.model = Q_Module(state_n, 512).to(device)
+        self.model = Q_Module().to(device)
         self.target_model = copy.deepcopy(self.model)
         self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=3e-4)
 
@@ -115,18 +112,23 @@ class DQNAgent(object):
         self.GAMMA = 0.99
         self.TAU = .005
 
+    def set(self, env):
+        self.env = env
+
     def memorize(self, current_state, action, reward, next_state, done):
         self.replay_memory.push(current_state, action, reward, next_state, done)
 
     def act(self, state, episode):
-        exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
-        if random.random() < exploration:
-            return self.env.action_space.sample()
+        # exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
+        # if random.random() < exploration:
+        #     return self.env.action_space.sample()
 
         state = np.array([state])
         state = torch.FloatTensor(state).to(device)
         with torch.no_grad():
-            raw_action = torch.argmax(self.model(state)).detach().numpy()
+            a = self.model(state)
+            raw_action = torch.argmax(a).detach().numpy()
+        print(raw_action, torch.max(a))
         action = raw_to_action(raw_action)
         return action
 
@@ -135,17 +137,16 @@ class DQNAgent(object):
             for model_kernel, model_target_kernel in zip(self.model.parameters(), self.target_model.parameters()):
                 model_target_kernel.copy_((1 - self.TAU) * model_target_kernel + self.TAU * model_kernel)
 
-    def train(self, steps):
+    def train(self):
         if len(self.replay_memory) < self.BATCH_SIZE:
             return
         samples = self.replay_memory.sample(self.BATCH_SIZE)
-        self.train_with_sample(samples, steps)
+        self.train_with_sample(samples)
 
-    def train_with_sample(self, samples, steps):
+    def train_with_sample(self, samples):
 
         current_state, action, reward, next_state, done = \
             samples["state"], samples["action"], samples["reward"], samples["next_state"], samples["done"]
-
         # Compute Y = r + γ * (1-done) * Q_target(s',a')
         with torch.no_grad():
             target_q = torch.max(self.target_model(next_state), axis=1)[0]
@@ -164,9 +165,50 @@ class DQNAgent(object):
         self.update_target()
 
 
+def add_movies(agent):
+    path = os.path.join(os.getcwd(), "movies")
+    for _, _, files in os.walk(path):
+        for file in files:
+            movie = retro.Movie(os.path.join(path, file))
+            movie.step()
+            environment = retro.make(game=movie.get_game(), state=None, use_restricted_actions=retro.Actions.ALL,
+                                     players=movie.players)
+
+            environment.initial_state = movie.get_state()
+            current_state = np.array([cv2.cvtColor(environment.reset(), cv2.COLOR_BGR2GRAY)])
+
+            step = 0
+            while movie.step():
+                print(step)
+                step += 1
+                keys = []
+                for player in range(movie.players):
+                    for index in range(environment.num_buttons):
+                        keys.append(movie.get_key(index, player))
+                # keys = [0, 0, 0, 0, 0, 0, 0, 1, 0]
+                next_state, reward, done, information = environment.step(keys)
+                if information["status"] == 255:
+                    reward = -10
+                else:
+                    reward = 10
+                next_state = np.array([cv2.cvtColor(next_state, cv2.COLOR_BGR2GRAY)])
+                agent.memorize(current_state, keys, reward, next_state, done)
+                if done:
+                    break
+                current_state = next_state
+
+            environment.close()
+    for i in range(100):
+        print(i)
+        agent.train()
+
+
 def main():
     # TRAIN PHASE
-    agent = DQNAgent(env)
+    agent = DQNAgent()
+    add_movies(agent)
+    env = retro.make(game='DonkeyKong-Nes')
+    agent.set(env)
     rewards_per_episode = []
 
     for episode in range(1_000):
@@ -179,17 +221,23 @@ def main():
         done = False
         rewards = []
         while not done:
-            if episode % 100 == 0:
+            if episode % 2 == 0:
                 env.render()
             action = agent.act(current_state, episode)
             # Repeta actiunile un numar de frame-uri
             for i in range(30):
-                next_state, reward, done, _ = env.step(action)
+                next_state, reward, done, info = env.step(action)
                 next_state = np.array([cv2.cvtColor(next_state, cv2.COLOR_BGR2GRAY)])
+                if info["status"] == 1 or info["status"] == 2 or info["status"] == 4:
+                    reward += 1
+                if info["status"] == 8 or info["status"] == 255:
+                    reward -= 10
+                if info["status"] == 10:
+                    reward += 5
                 rewards += [reward]
 
                 agent.memorize(current_state, action, reward, next_state, done)
-            agent.train(steps)
+            agent.train()
 
             current_state = next_state
             steps += 1
@@ -213,7 +261,7 @@ def main():
         while not done:
             env.render()
             action = agent.act(current_state, 1_000_000)
-            next_state, reward, done, _ = env.step(action)
+            next_state, reward, done, info = env.step(action)
             rewards += [reward]
             current_state = next_state
             steps += 1
