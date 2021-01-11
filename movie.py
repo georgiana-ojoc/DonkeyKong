@@ -1,8 +1,9 @@
 import retro
+import time
 
 
 def main():
-    movie = retro.Movie("level1_2.bk2")
+    movie = retro.Movie("movies\\level.bk2")
     movie.step()
     environment = retro.make(game=movie.get_game(), state=None, use_restricted_actions=retro.Actions.ALL,
                              players=movie.players)
@@ -16,6 +17,8 @@ def main():
         for player in range(movie.players):
             for index in range(environment.num_buttons):
                 keys.append(movie.get_key(index, player))
+        print(keys)
+        time.sleep(1)
         next_state, reward, done, information = environment.step(keys)
         environment.render()
         last_state = environment.em.get_state()
