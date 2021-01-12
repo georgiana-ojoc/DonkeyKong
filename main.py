@@ -15,22 +15,77 @@ import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+#TO DO: Nu stiu daca A este chiar [0,0,0,0,0,0,0,0,1] , nu pare sa mearga si trebuie sa verificam daca chiar e asa
+class Action(object):
+    def __init__(self, ):
+        super(action, self).__init__()
+        self.A =    [0,0,0,0,0,0,0,0,1]
+        self.RIGHT= [0,0,0,0,0,0,0,1,0] 
+        self.LEFT=  [0,0,0,0,0,0,1,0,0]
+        self.DOWN=  [0,0,0,0,0,1,0,0,0]
+        self.UP=    [0,0,0,0,1,0,0,0,0]
+        self.B=     [1,0,0,0,0,0,0,0,0]
+    def get_action(action_number):
+        A =    np.array([0,0,0,0,0,0,0,0,1])
+        RIGHT= np.array([0,0,0,0,0,0,0,1,0])
+        LEFT=  np.array([0,0,0,0,0,0,1,0,0])
+        DOWN=  np.array([0,0,0,0,0,1,0,0,0])
+        UP=    np.array([0,0,0,0,1,0,0,0,0])
+        B=     np.array([1,0,0,0,0,0,0,0,0])
+        
+        if action_number == 0:
+            return A
+        elif action_number == 1:
+            return RIGHT
+        elif action_number == 2:
+            return LEFT
+        elif action_number == 3:
+            return UP
+        elif action_number == 4:
+            return DOWN
+        elif action_number == 5:
+            return B
+        elif action_number == 6:
+            return A+RIGHT
+        elif action_number == 7:
+            return A+LEFT
+        elif action_number == 8:
+            return A+UP
+        elif action_number == 9:
+            return A+B
+        elif action_number == 10:
+            return B +RIGHT
+        else:
+            return B + LEFT
+    def get_action_number(actions):
+        A=0
+        RIGHT=1
+        LEFT=2
+        UP=3
+        DOWN=4
+        B=5+3
 
-def action_to_raw(actions):
-    raw_actions = []
-    for action in actions:
-        action = action.numpy()
-        raw_actions += [int(action.dot(2 ** np.arange(action.size)[::-1]))]
-    return raw_actions
-
-
-def raw_to_action(number):
-    binary = []
-    for i in range(9):
-        bit = number % 2
-        binary.insert(0, bit)
-        number = number // 2
-    return binary
+        actions_number=[]
+        for action in actions:
+            pressed_buttons=[9-(index+1) for index in range(9) if action[index] == 1 ]
+            if(len(pressed_buttons)==1):
+                if pressed_buttons[0] == B:
+                    actions_number+=[5]
+                else:
+                    actions_number+=[pressed_buttons[0]]
+            elif pressed_buttons == [RIGHT,A]:
+                actions_number+= [6]
+            elif pressed_buttons == [LEFT,A]:
+                actions_number+= [7]
+            elif pressed_buttons == [UP,A]:
+                actions_number+= [8]
+            elif pressed_buttons == [B,A]:
+                actions_number+= [9]
+            elif pressed_buttons == [B,RIGHT]:
+                actions_number+=[10]
+            else:
+                actions_number+=[11]
+        return np.array(actions_number)
 
 
 # aici nu cred ca mai trebuie sa umblam, deci VERIFIED
@@ -75,22 +130,23 @@ class ReplayBuffer:
 class Q_Module(nn.Module):
     def __init__(self):
         super(Q_Module, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, 5)
+        self.conv1 = nn.Conv2d(1, 16, 5)
         self.pool = nn.MaxPool2d(4, 4)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 12 * 13, 100)
-        self.fc2 = nn.Linear(100, 200)
-        self.fc3 = nn.Linear(200, 512)
+        self.conv2 = nn.Conv2d(16, 32, 5)
+        self.fc1 = nn.Linear(32 * 12 * 13, 100)
+        self.fc2 = nn.Linear(100, 32)
+        self.fc3 = nn.Linear(32, 12)
+        self.softmax=nn.Softmax(1)
 
     def forward(self, state):
         output = self.pool(F.relu(self.conv1(state)))
         output = self.pool(F.relu(self.conv2(output)))
-        output = output.view(-1, 16 * 12 * 13)
+        output = output.view(-1, 32 * 12 * 13)
         output = F.relu(self.fc1(output))
         output = F.relu(self.fc2(output))
         output = self.fc3(output)
+        #output=self.softmax(output)
         return output
-
 
 # Trebuie sa modificam actiunile de output daca dorim sa facemproblema mai mica
 class DQNAgent(object):
@@ -128,8 +184,8 @@ class DQNAgent(object):
         with torch.no_grad():
             a = self.model(state)
             raw_action = torch.argmax(a).detach().numpy()
-        print(raw_action, torch.max(a))
-        action = raw_to_action(raw_action)
+
+        action = Action.get_action(raw_action)
         return action
 
     def update_target(self, ):
@@ -147,16 +203,17 @@ class DQNAgent(object):
 
         current_state, action, reward, next_state, done = \
             samples["state"], samples["action"], samples["reward"], samples["next_state"], samples["done"]
+
         # Compute Y = r + γ * (1-done) * Q_target(s',a')
         with torch.no_grad():
             target_q = torch.max(self.target_model(next_state), axis=1)[0]
             Y = reward.T[0] + self.GAMMA * (1 - done.T[0]) * target_q
 
         # Compute critic loss like the sum of the mean squared error of the current q value
-        raw_action = action_to_raw(action)
-        current_q = torch.max(self.model(current_state), axis=1)[0]
-        loss = F.mse_loss(current_q, Y)
+        raw_action = torch.LongTensor(Action.get_action_number(action)).to(device)
+        current_q = self.model(current_state).gather(1,raw_action.view(1,self.BATCH_SIZE))[0]
 
+        loss = F.mse_loss(current_q, Y)
         # Update critic model using the previous computed loss
         self.model_optimizer.zero_grad()
         loss.backward()
@@ -228,6 +285,9 @@ def main():
             for i in range(30):
                 next_state, reward, done, info = env.step(action)
                 next_state = np.array([cv2.cvtColor(next_state, cv2.COLOR_BGR2GRAY)])
+
+
+
                 if info["status"] == 1 or info["status"] == 2 or info["status"] == 4:
                     reward += 1
                 if info["status"] == 8 or info["status"] == 255:
