@@ -2,7 +2,7 @@ import retro
 
 
 def main():
-    movie = retro.Movie("level1_2.bk2")
+    movie = retro.Movie("movies/level1_2.bk2")
     movie.step()
     environment = retro.make(game=movie.get_game(), state=None, use_restricted_actions=retro.Actions.ALL,
                              players=movie.players)
