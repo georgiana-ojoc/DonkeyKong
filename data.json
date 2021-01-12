@@ -1,5 +1,9 @@
 {
   "info": {
+    "button": {
+      "address": 20,
+      "type": "|u1"
+    },
     "gameover": {
       "address": 78,
       "type": "|u1"
@@ -12,12 +16,16 @@
       "address": 36,
       "type": ">d4"
     },
+    "status": {
+      "address": 150,
+      "type": "|u1"
+    },
     "x": {
       "address": 70,
       "type": "|u1"
     },
     "y": {
-      "address": 71,
+      "address": 73,
       "type": "|u1"
     }
   }

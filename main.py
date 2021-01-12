@@ -15,24 +15,25 @@ import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-#TO DO: Nu stiu daca A este chiar [0,0,0,0,0,0,0,0,1] , nu pare sa mearga si trebuie sa verificam daca chiar e asa
+
+# TO DO: Nu stiu daca A este chiar [0,0,0,0,0,0,0,0,1] , nu pare sa mearga si trebuie sa verificam daca chiar e asa
 class Action(object):
     def __init__(self, ):
-        super(action, self).__init__()
-        self.A =    [0,0,0,0,0,0,0,0,1]
-        self.RIGHT= [0,0,0,0,0,0,0,1,0] 
-        self.LEFT=  [0,0,0,0,0,0,1,0,0]
-        self.DOWN=  [0,0,0,0,0,1,0,0,0]
-        self.UP=    [0,0,0,0,1,0,0,0,0]
-        self.B=     [1,0,0,0,0,0,0,0,0]
+        self.A = [0, 0, 0, 0, 0, 0, 0, 0, 1]
+        self.RIGHT = [0, 0, 0, 0, 0, 0, 0, 1, 0]
+        self.LEFT = [0, 0, 0, 0, 0, 0, 1, 0, 0]
+        self.DOWN = [0, 0, 0, 0, 0, 1, 0, 0, 0]
+        self.UP = [0, 0, 0, 0, 1, 0, 0, 0, 0]
+        self.B = [1, 0, 0, 0, 0, 0, 0, 0, 0]
+
     def get_action(action_number):
-        A =    np.array([0,0,0,0,0,0,0,0,1])
-        RIGHT= np.array([0,0,0,0,0,0,0,1,0])
-        LEFT=  np.array([0,0,0,0,0,0,1,0,0])
-        DOWN=  np.array([0,0,0,0,0,1,0,0,0])
-        UP=    np.array([0,0,0,0,1,0,0,0,0])
-        B=     np.array([1,0,0,0,0,0,0,0,0])
-        
+        A = np.array([0, 0, 0, 0, 0, 0, 0, 0, 1])
+        RIGHT = np.array([0, 0, 0, 0, 0, 0, 0, 1, 0])
+        LEFT = np.array([0, 0, 0, 0, 0, 0, 1, 0, 0])
+        DOWN = np.array([0, 0, 0, 0, 0, 1, 0, 0, 0])
+        UP = np.array([0, 0, 0, 0, 1, 0, 0, 0, 0])
+        B = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0])
+
         if action_number == 0:
             return A
         elif action_number == 1:
@@ -40,51 +41,24 @@ class Action(object):
         elif action_number == 2:
             return LEFT
         elif action_number == 3:
-            return UP
-        elif action_number == 4:
             return DOWN
+        elif action_number == 4:
+            return UP
         elif action_number == 5:
             return B
         elif action_number == 6:
-            return A+RIGHT
-        elif action_number == 7:
-            return A+LEFT
-        elif action_number == 8:
-            return A+UP
-        elif action_number == 9:
-            return A+B
-        elif action_number == 10:
-            return B +RIGHT
-        else:
-            return B + LEFT
-    def get_action_number(actions):
-        A=0
-        RIGHT=1
-        LEFT=2
-        UP=3
-        DOWN=4
-        B=5+3
+            return np.array([0, 0, 0, 0, 0, 0, 0, 0, 0])
 
-        actions_number=[]
+    def get_action_number(actions):
+        actions_number = []
         for action in actions:
-            pressed_buttons=[9-(index+1) for index in range(9) if action[index] == 1 ]
-            if(len(pressed_buttons)==1):
-                if pressed_buttons[0] == B:
-                    actions_number+=[5]
-                else:
-                    actions_number+=[pressed_buttons[0]]
-            elif pressed_buttons == [RIGHT,A]:
-                actions_number+= [6]
-            elif pressed_buttons == [LEFT,A]:
-                actions_number+= [7]
-            elif pressed_buttons == [UP,A]:
-                actions_number+= [8]
-            elif pressed_buttons == [B,A]:
-                actions_number+= [9]
-            elif pressed_buttons == [B,RIGHT]:
-                actions_number+=[10]
-            else:
-                actions_number+=[11]
+            action = action.detach().numpy()[::-1]
+            index = np.argmax(action)
+            if action.tolist() == [0, 0, 0, 0, 0, 0, 0, 0, 0]:
+                index = 6
+            elif action.tolist() == [0, 0, 0, 0, 0, 0, 0, 0, 1]:
+                index = 5
+            actions_number += [index]
         return np.array(actions_number)
 
 
@@ -132,21 +106,22 @@ class Q_Module(nn.Module):
         super(Q_Module, self).__init__()
         self.conv1 = nn.Conv2d(1, 16, 5)
         self.pool = nn.MaxPool2d(4, 4)
-        self.conv2 = nn.Conv2d(16, 32, 5)
-        self.fc1 = nn.Linear(32 * 12 * 13, 100)
+        self.conv2 = nn.Conv2d(16, 10, 5)
+        self.fc1 = nn.Linear(10 * 5 * 6, 100)
         self.fc2 = nn.Linear(100, 32)
-        self.fc3 = nn.Linear(32, 12)
-        self.softmax=nn.Softmax(1)
+        self.fc3 = nn.Linear(32, 7)
+        self.softmax = nn.Softmax(1)
 
     def forward(self, state):
         output = self.pool(F.relu(self.conv1(state)))
         output = self.pool(F.relu(self.conv2(output)))
-        output = output.view(-1, 32 * 12 * 13)
+        output = output.view(-1, 10 * 5 * 6)
         output = F.relu(self.fc1(output))
         output = F.relu(self.fc2(output))
         output = self.fc3(output)
-        #output=self.softmax(output)
+        # output = self.softmax(output)
         return output
+
 
 # Trebuie sa modificam actiunile de output daca dorim sa facemproblema mai mica
 class DQNAgent(object):
@@ -175,15 +150,16 @@ class DQNAgent(object):
         self.replay_memory.push(current_state, action, reward, next_state, done)
 
     def act(self, state, episode):
-        # exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
-        # if random.random() < exploration:
-        #     return self.env.action_space.sample()
+        exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
+        if random.random() < exploration:
+            return Action.get_action(random.randint(0, 6))
 
         state = np.array([state])
         state = torch.FloatTensor(state).to(device)
         with torch.no_grad():
-            a = self.model(state)
-            raw_action = torch.argmax(a).detach().numpy()
+            output = self.model(state)
+            print(output)
+            raw_action = torch.argmax(output).detach().numpy()
 
         action = Action.get_action(raw_action)
         return action
@@ -211,7 +187,7 @@ class DQNAgent(object):
 
         # Compute critic loss like the sum of the mean squared error of the current q value
         raw_action = torch.LongTensor(Action.get_action_number(action)).to(device)
-        current_q = self.model(current_state).gather(1,raw_action.view(1,self.BATCH_SIZE))[0]
+        current_q = self.model(current_state).gather(1, raw_action.view(1, self.BATCH_SIZE))[0]
 
         loss = F.mse_loss(current_q, Y)
         # Update critic model using the previous computed loss
@@ -220,6 +196,13 @@ class DQNAgent(object):
         self.model_optimizer.step()
 
         self.update_target()
+
+
+def downscale(state):
+    grayImage = cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
+    height = int(grayImage.shape[0] / 2)
+    width = int(grayImage.shape[1] / 2)
+    return np.array([cv2.resize(grayImage, (width, height))])
 
 
 def add_movies(agent):
@@ -232,7 +215,7 @@ def add_movies(agent):
                                      players=movie.players)
 
             environment.initial_state = movie.get_state()
-            current_state = np.array([cv2.cvtColor(environment.reset(), cv2.COLOR_BGR2GRAY)])
+            current_state = downscale(environment.reset())
 
             step = 0
             while movie.step():
@@ -242,13 +225,13 @@ def add_movies(agent):
                 for player in range(movie.players):
                     for index in range(environment.num_buttons):
                         keys.append(movie.get_key(index, player))
-                # keys = [0, 0, 0, 0, 0, 0, 0, 1, 0]
                 next_state, reward, done, information = environment.step(keys)
                 if information["status"] == 255:
                     reward = -10
                 else:
                     reward = 10
-                next_state = np.array([cv2.cvtColor(next_state, cv2.COLOR_BGR2GRAY)])
+                next_state = downscale(next_state)
+
                 agent.memorize(current_state, keys, reward, next_state, done)
                 if done:
                     break
@@ -263,7 +246,7 @@ def add_movies(agent):
 def main():
     # TRAIN PHASE
     agent = DQNAgent()
-    add_movies(agent)
+    # add_movies(agent)
     env = retro.make(game='DonkeyKong-Nes')
     agent.set(env)
     rewards_per_episode = []
@@ -271,31 +254,41 @@ def main():
     for episode in range(1_000):
         start_time = time.time()
         print("EPISODE: ", episode)
-        current_state = env.reset()
-        current_state = np.array([cv2.cvtColor(current_state, cv2.COLOR_BGR2GRAY)])
+        current_state = downscale(env.reset())
 
         steps = 0
         done = False
         rewards = []
         while not done:
-            if episode % 2 == 0:
+            for i in range(10):
+                env.step([0, 0, 0, 0, 0, 0, 0, 0, 0])
+            if episode % 1 == 0:
                 env.render()
             action = agent.act(current_state, episode)
+            print(env.get_action_meaning(action))
+            prev_x = None
+            prev_y = None
             # Repeta actiunile un numar de frame-uri
-            for i in range(30):
+            for i in range(5):
                 next_state, reward, done, info = env.step(action)
-                next_state = np.array([cv2.cvtColor(next_state, cv2.COLOR_BGR2GRAY)])
-
-
+                next_state = downscale(next_state)
 
                 if info["status"] == 1 or info["status"] == 2 or info["status"] == 4:
-                    reward += 1
+                    reward += 5
                 if info["status"] == 8 or info["status"] == 255:
                     reward -= 10
                 if info["status"] == 10:
-                    reward += 5
+                    reward += 10
+                if prev_x is not None and prev_y is not None:
+                    if info["y"] < prev_y:
+                        reward += 10
+                        if info["status"] == 2:
+                            reward += 100
+                    elif info["x"] == prev_x:
+                        reward -= 15
+                prev_x = info["x"]
+                prev_y = info["y"]
                 rewards += [reward]
-
                 agent.memorize(current_state, action, reward, next_state, done)
             agent.train()
 
