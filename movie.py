@@ -1,5 +1,4 @@
 import retro
-import time
 
 
 def main():
@@ -35,6 +34,8 @@ def main():
             environment.render()
             if done:
                 break
+
+    environment.close()
 
 
 if __name__ == "__main__":
