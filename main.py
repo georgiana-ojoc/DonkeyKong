@@ -80,7 +80,7 @@ class ReplayBuffer:
         next_state_batch = []
         done_batch = []
 
-        # batch = random.sample(self.buffer, batch_size)
+        #batch = random.sample(self.buffer, batch_size)
         batch = list(self.buffer)[-batch_size:]
 
         for experience in batch:
@@ -107,9 +107,9 @@ class Q_Module(nn.Module):
     def __init__(self):
         super(Q_Module, self).__init__()
         self.conv1 = nn.Conv2d(1, 16, 5)
-        self.pool = nn.MaxPool2d(2, 2)
+        self.pool = nn.MaxPool2d(3, 3)
         self.conv2 = nn.Conv2d(16, 10, 5)
-        self.fc1 = nn.Linear(1320, 200)
+        self.fc1 = nn.Linear(180, 200)
         self.fc2 = nn.Linear(200, 32)
         self.fc3 = nn.Linear(32, 7)
         self.softmax = nn.Softmax(1)
@@ -117,11 +117,11 @@ class Q_Module(nn.Module):
     def forward(self, state):
         output = self.pool(F.relu(self.conv1(state)))
         output = self.pool(F.relu(self.conv2(output)))
-        output = output.view(-1, 1320)
+        output = output.view(-1, 180)
         output = F.relu(self.fc1(output))
         output = F.relu(self.fc2(output))
         output = self.fc3(output)
-        output = self.softmax(output)
+        #output = self.softmax(output)
         return output
 
 
@@ -159,10 +159,8 @@ class DQNAgent(object):
         state = np.array([state])
         state = torch.FloatTensor(state).to(device)
         with torch.no_grad():
-            output = self.model(state).detach().numpy().reshape(7)
-            print(output)
-            raw_action = np.random.choice(7, p=output)
-            # raw_action = np.argmax(output)
+            output = self.model(state).detach().numpy()
+            raw_action = np.argmax(output)
 
         action = Action.get_action(raw_action)
         return action
@@ -253,7 +251,7 @@ def add_movies(agent):
                 # reward = +10
                 actions.append(action)
                 rewards.append(reward)
-                print(reward, environment.get_action_meaning(action))
+                #print(reward, environment.get_action_meaning(action))
                 for i in range(1, nr_stacks):
                     if steps - i >= 0:
                         stacked_frames[steps - i] = (np.hstack((stacked_frames[steps - i], current_frame)))
@@ -283,6 +281,10 @@ def calc_reward(info, prev):
             reward += 5
         if info['x'] != prev['x']:
             reward += 10
+
+        if info['x'] < 49 or info['x'] > 200:
+            reward-=500
+
     elif prev['status'] != info['status']:
         reward -= 500
     return np.interp(reward, [-500, 500], [-1 , 1])
@@ -291,7 +293,7 @@ def calc_reward(info, prev):
 def main():
     # TRAIN PHASE
     agent = DQNAgent()
-    # add_movies(agent)
+    #add_movies(agent)
     env = retro.make(game='DonkeyKong-Nes')
     agent.set(env)
     rewards_per_episode = []
