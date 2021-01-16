@@ -1,9 +1,11 @@
 import copy
+import os
 import random
 import time
 from collections import deque
 
 import cv2
+import keyboard
 import matplotlib.pyplot as plt
 import numpy as np
 import retro
@@ -11,7 +13,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -79,14 +80,15 @@ class ReplayBuffer:
         next_state_batch = []
         done_batch = []
 
-        batch = random.sample(self.buffer, batch_size)
+        # batch = random.sample(self.buffer, batch_size)
+        batch = list(self.buffer)[-batch_size:]
 
         for experience in batch:
             state, action, reward, next_state, done = experience
             state_batch.append(state)
             action_batch.append(action)
             reward_batch.append(reward)
-            next_state_batch.append(state)
+            next_state_batch.append(next_state)
             done_batch.append(done)
 
         return {"state": torch.FloatTensor(state_batch).to(self.device),
@@ -105,21 +107,21 @@ class Q_Module(nn.Module):
     def __init__(self):
         super(Q_Module, self).__init__()
         self.conv1 = nn.Conv2d(1, 16, 5)
-        self.pool = nn.MaxPool2d(4, 4)
+        self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(16, 10, 5)
-        self.fc1 = nn.Linear(10 * 5 * 6, 100)
-        self.fc2 = nn.Linear(100, 32)
+        self.fc1 = nn.Linear(1320, 200)
+        self.fc2 = nn.Linear(200, 32)
         self.fc3 = nn.Linear(32, 7)
         self.softmax = nn.Softmax(1)
 
     def forward(self, state):
         output = self.pool(F.relu(self.conv1(state)))
         output = self.pool(F.relu(self.conv2(output)))
-        output = output.view(-1, 10 * 5 * 6)
+        output = output.view(-1, 1320)
         output = F.relu(self.fc1(output))
         output = F.relu(self.fc2(output))
         output = self.fc3(output)
-        # output = self.softmax(output)
+        output = self.softmax(output)
         return output
 
 
@@ -157,9 +159,10 @@ class DQNAgent(object):
         state = np.array([state])
         state = torch.FloatTensor(state).to(device)
         with torch.no_grad():
-            output = self.model(state)
+            output = self.model(state).detach().numpy().reshape(7)
             print(output)
-            raw_action = torch.argmax(output).detach().numpy()
+            raw_action = np.random.choice(7, p=output)
+            # raw_action = np.argmax(output)
 
         action = Action.get_action(raw_action)
         return action
@@ -198,11 +201,20 @@ class DQNAgent(object):
         self.update_target()
 
 
-def downscale(state):
+def downscale(state, x, y):
     grayImage = cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
-    height = int(grayImage.shape[0] / 2)
-    width = int(grayImage.shape[1] / 2)
-    return np.array([cv2.resize(grayImage, (width, height))])
+    max_h, max_w = grayImage.shape
+    h = 50
+    w = 75
+    y = y if y > h else h
+    y = y if y + h < max_h else max_h - h
+    x = x if x > w else w
+    x = x if x + w < max_w else max_w - w
+    frame = grayImage[y - h:y + h, x - w:x + w]
+    height = int(frame.shape[0] / 4)
+    width = int(frame.shape[1] / 4)
+    frame = cv2.resize(frame, (width, height))
+    return np.array([cv2.resize(frame, (width, height))])
 
 
 def add_movies(agent):
@@ -215,32 +227,65 @@ def add_movies(agent):
                                      players=movie.players)
 
             environment.initial_state = movie.get_state()
-            current_state = downscale(environment.reset())
+            environment.reset()
 
-            step = 0
+            steps = 0
+            nr_stacks = 4
+            prev = None
+            rewards = []
+            stacked_frames = []
+            actions = []
             while movie.step():
-                print(step)
-                step += 1
-                keys = []
+                steps += 1
+                action = []
                 for player in range(movie.players):
                     for index in range(environment.num_buttons):
-                        keys.append(movie.get_key(index, player))
-                next_state, reward, done, information = environment.step(keys)
-                if information["status"] == 255:
-                    reward = -10
-                else:
-                    reward = 10
-                next_state = downscale(next_state)
-
-                agent.memorize(current_state, keys, reward, next_state, done)
+                        action.append(movie.get_key(index, player))
+                action = Action.get_action(Action.get_action_number(torch.FloatTensor([action])))
+                current_frame, reward, done, info = environment.step(action)
                 if done:
                     break
-                current_state = next_state
+                current_frame = downscale(current_frame, info['y'], info['x'])
+                stacked_frames.append(current_frame)
+                info['reward'] = reward
+                info['action'] = action
+                reward += 2 * calc_reward(info, prev)
+                # reward = +10
+                actions.append(action)
+                rewards.append(reward)
+                print(reward, environment.get_action_meaning(action))
+                for i in range(1, nr_stacks):
+                    if steps - i >= 0:
+                        stacked_frames[steps - i] = (np.hstack((stacked_frames[steps - i], current_frame)))
+                if steps > nr_stacks:
+                    offset = steps - (nr_stacks + 1)
+                    # print(stacked_frames[offset].shape, stacked_frames[offset + 1].shape)
+                    avg = np.array(rewards[-offset:]).mean()
+                    agent.memorize(stacked_frames[0], actions[offset], avg, stacked_frames[1],
+                                   done)
+                if steps % 10 == 0:
+                    agent.train()
+                prev = info
 
             environment.close()
-    for i in range(100):
-        print(i)
-        agent.train()
+
+
+def calc_reward(info, prev):
+    reward = 0
+    if prev is None:
+        return 0
+    reward += info['reward']
+    if info['status'] != 255:  # Cat timp e in viata
+        if info["y"] != prev['y']:
+            if info['status'] == 2:  # Urca scara
+                if info["y"] < prev['y']:
+                    reward += 10
+            reward += 5
+        if info['x'] != prev['x']:
+            reward += 10
+    elif prev['status'] != info['status']:
+        reward -= 500
+    return np.interp(reward, [-500, 500], [-1 , 1])
 
 
 def main():
@@ -250,49 +295,57 @@ def main():
     env = retro.make(game='DonkeyKong-Nes')
     agent.set(env)
     rewards_per_episode = []
-
+    show_render = False
+    nr_stacks = 4
     for episode in range(1_000):
         start_time = time.time()
         print("EPISODE: ", episode)
-        current_state = downscale(env.reset())
 
+        env.reset()
         steps = 0
         done = False
+        prev = None
         rewards = []
+        stacked_frames = []
+        actions = []
         while not done:
-            for i in range(10):
-                env.step([0, 0, 0, 0, 0, 0, 0, 0, 0])
-            if episode % 1 == 0:
+            if keyboard.is_pressed('f12'):
+                while keyboard.is_pressed('f12'):
+                    pass
+                show_render = ~ show_render
+            if show_render:
                 env.render()
-            action = agent.act(current_state, episode)
-            print(env.get_action_meaning(action))
-            prev_x = None
-            prev_y = None
-            # Repeta actiunile un numar de frame-uri
-            for i in range(5):
-                next_state, reward, done, info = env.step(action)
-                next_state = downscale(next_state)
+            if steps > nr_stacks:
+                offset = steps - nr_stacks
+                action = agent.act(stacked_frames[offset], episode)
+            else:
+                action = Action.get_action(random.randint(0, 6))
+            # action = Action.get_action(1)
+            current_frame, reward, done, info = env.step(action)
+            current_frame = downscale(current_frame, info['y'], info['x'])
+            stacked_frames.append(current_frame)
+            info['reward'] = reward
+            info['action'] = action
+            reward += calc_reward(info, prev)
+            # reward = -1000
+            actions.append(action)
+            rewards.append(reward)
+            print(reward, env.get_action_meaning(action))
+            for i in range(1, nr_stacks):
+                if steps - i >= 0:
+                    stacked_frames[steps - i] = (np.hstack((stacked_frames[steps - i], current_frame)))
+            if steps > nr_stacks:
+                offset = steps - (nr_stacks + 1)
+                # print(stacked_frames[offset].shape, stacked_frames[offset + 1].shape)
+                avg = np.array(rewards[-offset:]).mean()
+                agent.memorize(stacked_frames[offset], actions[offset], avg, stacked_frames[offset + 1],
+                               done)
 
-                if info["status"] == 1 or info["status"] == 2 or info["status"] == 4:
-                    reward += 5
-                if info["status"] == 8 or info["status"] == 255:
-                    reward -= 10
-                if info["status"] == 10:
-                    reward += 10
-                if prev_x is not None and prev_y is not None:
-                    if info["y"] < prev_y:
-                        reward += 10
-                        if info["status"] == 2:
-                            reward += 100
-                    elif info["x"] == prev_x:
-                        reward -= 15
-                prev_x = info["x"]
-                prev_y = info["y"]
-                rewards += [reward]
-                agent.memorize(current_state, action, reward, next_state, done)
-            agent.train()
+            prev = info
+            if steps % 10 == 0:
+                print("Training")
+                agent.train()
 
-            current_state = next_state
             steps += 1
         rewards_per_episode += [np.array(rewards).sum()]
         print("TOTAL EPISODE REWARD: ", np.array(rewards).sum())
