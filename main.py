@@ -282,7 +282,7 @@ def calc_reward(info, prev):
         if info['x'] != prev['x']:
             reward += 10
 
-        if info['x'] < 49 or info['x'] > 200:
+        if info['x'] < 47 or info['x'] > 202:
             reward-=500
 
     elif prev['status'] != info['status']:
