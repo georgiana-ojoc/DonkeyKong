@@ -1,11 +1,17 @@
+from positions import get_all_positions
+
+from datetime import datetime
+import imageio
+import numpy
+
 import copy
 import os
-import random
 import time
 from collections import deque
 
 import cv2
 import keyboard
+import math
 import matplotlib.pyplot as plt
 import numpy as np
 import retro
@@ -13,8 +19,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
+
+# Aici sunt toate pozitiile fixe utile (scari, scari rupte, ciocane, finish)
+positions = get_all_positions()
 
 
 # TO DO: Nu stiu daca A este chiar [0,0,0,0,0,0,0,0,1] , nu pare sa mearga si trebuie sa verificam daca chiar e asa
@@ -53,7 +62,7 @@ class Action(object):
     def get_action_number(actions):
         actions_number = []
         for action in actions:
-            action = action.detach().numpy()[::-1]
+            action = action.detach().cpu().numpy()[::-1]
             index = np.argmax(action)
             if action.tolist() == [0, 0, 0, 0, 0, 0, 0, 0, 0]:
                 index = 6
@@ -80,7 +89,7 @@ class ReplayBuffer:
         next_state_batch = []
         done_batch = []
 
-        #batch = random.sample(self.buffer, batch_size)
+        # batch = random.sample(self.buffer, batch_size)
         batch = list(self.buffer)[-batch_size:]
 
         for experience in batch:
@@ -106,69 +115,66 @@ class ReplayBuffer:
 
 
 class DuelingDQN(nn.Module):
-  """Convolutional neural network for the Atari games."""
-  def __init__(self, num_actions):
-    super(DuelingDQN, self).__init__()
-    self.conv1 = nn.Conv2d(4, 32, kernel_size=8, stride=4)
-    std = math.sqrt(2.0 / (4 * 84 * 84))
-    nn.init.normal_(self.conv1.weight, mean=0.0, std=std)
-    self.conv1.bias.data.fill_(0.0)
+    """Convolutional neural network for the Atari games."""
 
-    self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
-    std = math.sqrt(2.0 / (32 * 4 * 8 * 8))
-    nn.init.normal_(self.conv2.weight, mean=0.0, std=std)
-    self.conv2.bias.data.fill_(0.0)
+    def __init__(self, num_actions):
+        super(DuelingDQN, self).__init__()
+        self.conv1 = nn.Conv2d(4, 32, kernel_size=8, stride=4)
+        std = math.sqrt(2.0 / (4 * 84 * 84))
+        nn.init.normal_(self.conv1.weight, mean=0.0, std=std)
+        self.conv1.bias.data.fill_(0.0)
 
-    self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-    std = math.sqrt(2.0 / (64 * 32 * 4 * 4))
-    nn.init.normal_(self.conv3.weight, mean=0.0, std=std)
-    self.conv3.bias.data.fill_(0.0)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
+        std = math.sqrt(2.0 / (32 * 4 * 8 * 8))
+        nn.init.normal_(self.conv2.weight, mean=0.0, std=std)
+        self.conv2.bias.data.fill_(0.0)
 
-    self.fc1 = nn.Linear(64 * 7 * 7, 512)
-    std = math.sqrt(2.0 / (64 * 64 * 3 * 3))
-    nn.init.normal_(self.fc1.weight, mean=0.0, std=std)
-    self.fc1.bias.data.fill_(0.0)
-    self.V = nn.Linear(512, 1)
-    self.A = nn.Linear(512, num_actions)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        std = math.sqrt(2.0 / (64 * 32 * 4 * 4))
+        nn.init.normal_(self.conv3.weight, mean=0.0, std=std)
+        self.conv3.bias.data.fill_(0.0)
 
+        self.fc1 = nn.Linear(64 * 7 * 7, 512)
+        std = math.sqrt(2.0 / (64 * 64 * 3 * 3))
+        nn.init.normal_(self.fc1.weight, mean=0.0, std=std)
+        self.fc1.bias.data.fill_(0.0)
+        self.V = nn.Linear(512, 1)
+        self.A = nn.Linear(512, num_actions)
 
-  def forward(self, states):
-    """Forward pass of the neural network with some inputs."""
-    x = F.relu(self.conv1(states))
-    x = F.relu(self.conv2(x))
-    x = F.relu(self.conv3(x))
-    x = F.relu(self.fc1(x.view(x.size(0), -1)))  # Flatten imathut.
-    V = self.V(x)
-    A = self.A(x)
-    Q = V + (A - A.mean(dim=1, keepdim=True))
-    return Q
-
-
+    def forward(self, states):
+        """Forward pass of the neural network with some inputs."""
+        x = F.relu(self.conv1(states))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.fc1(x.view(x.size(0), -1)))  # Flatten imathut.
+        V = self.V(x)
+        A = self.A(x)
+        Q = V + (A - A.mean(dim=1, keepdim=True))
+        return Q
 
 
 class Q_Module(nn.Module):
     def __init__(self):
         super(Q_Module, self).__init__()
-        self.conv1  = nn.Conv2d(1, 32, kernel_size=6 , stride= 3)
-        self.conv2  = nn.Conv2d(32, 64, kernel_size=3 , stride=1)
-        self.conv3  = nn.Conv2d(64, 64, kernel_size=2 , stride= 1)
-        self.fc1    = nn.Linear(64 * 32 , 512)
-        self.V      = nn.Linear(512, 1)
-        self.A      = nn.Linear(512,7)
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=6, stride=3)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=2, stride=1)
+        self.fc1 = nn.Linear(64 * 32, 512)
+        self.V = nn.Linear(512, 1)
+        self.A = nn.Linear(512, 7)
 
     def forward(self, state):
-
         output = F.relu(self.conv1(state))
         output = F.relu(self.conv2(output))
         output = F.relu(self.conv3(output))
-        output = F.relu(self.fc1(output.view(output.size(0),-1)))
-        V=self.V(output)
-        A=self.A(output)
-        Q= V + (A-A.mean(dim=1,keepdim=True))
+        output = F.relu(self.fc1(output.view(output.size(0), -1)))
+        V = self.V(output)
+        A = self.A(output)
+        Q = V + (A - A.mean(dim=1, keepdim=True))
         return Q
 
 
-# Trebuie sa modificam actiunile de output daca dorim sa facemproblema mai mica
+# Trebuie sa modificam actiunile de output daca dorim sa facem problema mai mica
 class DQNAgent(object):
     def __init__(self):
         self.env = None
@@ -177,7 +183,6 @@ class DQNAgent(object):
         self.model = Q_Module().to(device)
         self.target_model = copy.deepcopy(self.model)
         self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=3e-4)
-
 
         # Replay memory for training
         self.BATCH_SIZE = 10
@@ -196,14 +201,14 @@ class DQNAgent(object):
         self.replay_memory.push(current_state, action, reward, next_state, done)
 
     def act(self, state, episode):
-        #exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
-        #if random.random() < exploration:
-            #return Action.get_action(random.randint(0, 6))
+        # exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
+        # if random.random() < exploration:
+        # return Action.get_action(random.randint(0, 6))
 
         state = np.array([state])
         state = torch.FloatTensor(state).to(device)
         with torch.no_grad():
-            output = self.model(state).detach().numpy()
+            output = self.model(state).detach().cpu().numpy()
             raw_action = np.argmax(output)
 
         action = Action.get_action(raw_action)
@@ -225,16 +230,14 @@ class DQNAgent(object):
         current_state, action, reward, next_state, done = \
             samples["state"], samples["action"], samples["reward"], samples["next_state"], samples["done"]
 
-
-
         with torch.no_grad():
-            next_action = self.model(next_state).argmax(dim=-1,keepdim=True)
-            next_q      = self.target_model(next_state).gather(1,next_action).squeeze()
+            next_action = self.model(next_state).argmax(dim=-1, keepdim=True)
+            next_q = self.target_model(next_state).gather(1, next_action).squeeze()
             Y = reward + (1.0 - done) * self.GAMMA * next_q
 
         action = torch.LongTensor(Action.get_action_number(action)).to(device)
         current_q = self.model(current_state).gather(1, action.unsqueeze(dim=-1)).squeeze()
-        loss=F.mse_loss(current_q,Y.detach())
+        loss = F.mse_loss(current_q, Y.detach())
 
         # Update critic model using the previous computed loss
         self.model_optimizer.zero_grad()
@@ -264,15 +267,18 @@ def add_movies(agent):
     path = os.path.join(os.getcwd(), "movies")
     for _, _, files in os.walk(path):
         for file in files:
+            if os.path.splitext(file)[1] != ".bk2":
+                continue
+            print(file)
             movie = retro.Movie(os.path.join(path, file))
             movie.step()
             environment = retro.make(game=movie.get_game(), state=None, use_restricted_actions=retro.Actions.ALL,
                                      players=movie.players)
 
             environment.initial_state = movie.get_state()
-            
-            current_frame=environment.reset()
-            current_frame= downscale(current_frame,0,0)
+
+            current_frame = environment.reset()
+            current_frame = downscale(current_frame, 0, 0)
 
             steps = 0
             nr_stacks = 4
@@ -283,49 +289,87 @@ def add_movies(agent):
                 for player in range(movie.players):
                     for index in range(environment.num_buttons):
                         action.append(movie.get_key(index, player))
-                action = Action.get_action(Action.get_action_number(torch.FloatTensor([action])))
+                # action = Action.get_action(Action.get_action_number(torch.FloatTensor([action])))
                 next_frame, reward, done, info = environment.step(action)
+                # environment.render()
                 if done:
                     break
                 next_frame = downscale(next_frame, info['y'], info['x'])
                 info['reward'] = reward
                 info['action'] = action
-                reward += 2 * calc_reward(info, prev)
-                # reward = +10
-                agent.memorize(current_frame, action, reward, next_frame,done)
+                added_reward = calc_reward(info, prev, movie=True)
+                reward += 2 * added_reward
+                agent.memorize(current_frame, action, reward, next_frame, done)
 
                 if steps % 10 == 0:
                     agent.train()
-                
+
                 prev = info
-                current_frame=next_frame
+                current_frame = next_frame
 
             environment.close()
+            # movie.close()
 
 
-def calc_reward(info, prev):
+def calc_reward(info, prev, movie=False):
+    if movie:
+        left = 14
+        right = 213
+    else:
+        left = 30
+        right = 202
     reward = 0
-    if prev is None:
+    if info['x'] + info['y'] == 0 or prev is None:
         return 0
-    reward += info['reward']
     if info['status'] != 255:  # Cat timp e in viata
+        # # scad din reward daca sta in fata unei scari rupte, ca dupa poate pleaca de langa ea
+        # # ar putea astepta aici dintr-un motiv intemeiat, dar macar de test
+        # if info['x'] == prev['x'] and info['y'] == prev['y']:
+        #     # la pozitia de start sau in stanga ei
+        #     if info['y'] == 209 and info['x'] <= 53:
+        #         reward -= 500
+        #     else:
+        #         for ladder in positions["broken_ladders"]:
+        #             if ladder['x'] - 1 <= info['x'] <= ladder['x'] + 1 and ladder['y'] - 1 <= info['y'] <= ladder['y'] + 1:
+        #                 reward -= 50
+        #                 break
         if info["y"] != prev['y']:
-            if info['status'] == 2:  # Urca scara
-                if info["y"] < prev['y']:
+            # button fiindca status-ul nu se schimba imediat :D
+            if info['button'] == 8:  # Urca scara
+                if info['y'] < prev['y']:
                     reward += 100
             reward += 50
         if info['x'] != prev['x']:
             reward += 10
-
-        if info['x'] < 47 or info['x'] > 202:
-            reward-=500
-
+            # # reward mare daca a ajuns la finish
+            # finish = positions["finish"][0]
+            # if finish['x'] - 1 <= info['x'] <= finish['x'] + 1 and finish['y'] - 1 <= info['y'] <= finish['y'] + 1:
+            #     reward += 500
+            #     return reward
+            # # inca putin reward daca a ajuns in fata unei scari, ca dupa poate face UP
+            # for ladder in positions["ladders"]:
+            #     if ladder['x'] - 1 <= info['x'] <= ladder['x'] + 1 and ladder['y'] - 1 <= info['y'] <= ladder['y'] + 1:
+            #         reward += 50
+            #         break
+            # # inca putin reward daca a ajuns sub un ciocan, ca dupa poate sare
+            # for ladder in positions["hammers"]:
+            #     if ladder['x'] - 1 <= info['x'] <= ladder['x'] + 1 and ladder['y'] - 1 <= info['y'] <= ladder['y'] + 1:
+            #         reward += 50
+            #         break
+        # la stanga pozitiei de start
+        # 30 ca poate, poate ia un ciocan :))
+        elif (info['y'] == 209 and info['x'] < 53) or (info['x'] < left or info['x'] > right):
+            reward -= 500
     elif prev['status'] != info['status']:
         reward -= 50
     return reward
 
 
 def main():
+    path = os.path.join(os.getcwd(), "GIFs")
+    if not os.path.exists(path):
+        os.mkdir(path)
+
     # TRAIN PHASE
     agent = DQNAgent()
     add_movies(agent)
@@ -338,8 +382,13 @@ def main():
         start_time = time.time()
         print("EPISODE: ", episode)
 
-        current_state=env.reset()
-        current_state = downscale(current_state,0,0)
+        images = []
+        # pozitia de start
+        x_of_best_y = 53
+        best_y = 209
+
+        current_state = env.reset()
+        current_state = downscale(current_state, 0, 0)
 
         print(current_state.shape)
 
@@ -361,22 +410,27 @@ def main():
             # action = Action.get_action(1)
             next_state, reward, done, info = env.step(action)
             next_state = downscale(next_state, info['y'], info['x'])
-            
+
+            images += [env.render(mode="rgb_array")]
+            # sa nu fie best_y cand sare
+            if info['status'] != 4 and 0 < info['y'] <= best_y:
+                x_of_best_y = info['x']
+                best_y = info['y']
+
             info['reward'] = reward
             info['action'] = action
             reward += calc_reward(info, prev)
             actions.append(action)
             rewards.append(reward)
-            #print(reward, env.get_action_meaning(action))
-            
+            # print(reward, env.get_action_meaning(action))
 
-            agent.memorize(current_state,action,reward,next_state,done)
+            agent.memorize(current_state, action, reward, next_state, done)
             if steps % 10:
                 agent.train()
 
             steps += 1
-            current_state=next_state
-            prev=info
+            current_state = next_state
+            prev = info
 
         rewards_per_episode += [np.array(rewards).sum()]
         print("TOTAL EPISODE REWARD: ", np.array(rewards).sum())
@@ -386,7 +440,14 @@ def main():
         print("STEPS: ", steps)
         print()
 
-    #plot_reward(rewards_per_episode, range(1000))
+        # daca macar a ajuns langa prima scara buna, salvez un GIF
+        if best_y <= 205:
+            imageio.mimsave(
+                os.path.join(path, str(x_of_best_y) + ' ' + str(best_y) + ' ' + str(rewards_per_episode[-1]) +
+                             ' ' + datetime.now().strftime("%Y-%m-%d %H-%M-%S") + ".gif"),
+                [numpy.array(image) for image in images], fps=30)
+
+    # plot_reward(rewards_per_episode, range(1000))
     # TEST PHASE
     while True:
         input("PRESS ANY KEY FOR DEMONSTRATION...")
