@@ -13,7 +13,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -80,7 +79,7 @@ class ReplayBuffer:
         next_state_batch = []
         done_batch = []
 
-        #batch = random.sample(self.buffer, batch_size)
+        # batch = random.sample(self.buffer, batch_size)
         batch = list(self.buffer)[-batch_size:]
 
         for experience in batch:
@@ -121,7 +120,7 @@ class Q_Module(nn.Module):
         output = F.relu(self.fc1(output))
         output = F.relu(self.fc2(output))
         output = self.fc3(output)
-        #output = self.softmax(output)
+        # output = self.softmax(output)
         return output
 
 
@@ -251,7 +250,7 @@ def add_movies(agent):
                 # reward = +10
                 actions.append(action)
                 rewards.append(reward)
-                #print(reward, environment.get_action_meaning(action))
+                # print(reward, environment.get_action_meaning(action))
                 for i in range(1, nr_stacks):
                     if steps - i >= 0:
                         stacked_frames[steps - i] = (np.hstack((stacked_frames[steps - i], current_frame)))
@@ -283,17 +282,17 @@ def calc_reward(info, prev):
             reward += 10
 
         if info['x'] < 47 or info['x'] > 202:
-            reward-=500
+            reward -= 500
 
     elif prev['status'] != info['status']:
         reward -= 500
-    return np.interp(reward, [-500, 500], [-1 , 1])
+    return np.interp(reward, [-500, 500], [-1, 1])
 
 
 def main():
     # TRAIN PHASE
     agent = DQNAgent()
-    #add_movies(agent)
+    # add_movies(agent)
     env = retro.make(game='DonkeyKong-Nes')
     agent.set(env)
     rewards_per_episode = []
