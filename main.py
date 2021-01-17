@@ -3,8 +3,10 @@ import os
 import random
 import time
 from collections import deque
+from datetime import datetime
 
 import cv2
+import imageio
 import keyboard
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,8 +15,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 
 # TO DO: Nu stiu daca A este chiar [0,0,0,0,0,0,0,0,1] , nu pare sa mearga si trebuie sa verificam daca chiar e asa
@@ -39,7 +40,6 @@ class Action(object):
             return LEFT
         elif action_number == 3:
             return UP
-
 
     def get_action_number(actions):
         actions_number = []
@@ -98,18 +98,20 @@ class Q_Module(nn.Module):
         self.conv1 = nn.Conv2d(1, 16, 5)
         self.pool = nn.MaxPool2d(3, 3)
         self.conv2 = nn.Conv2d(16, 10, 5)
-        self.fc1 = nn.Linear(20, 200)
+        self.fc1 = nn.Linear(4_930, 200)
         self.fc2 = nn.Linear(200, 32)
         self.fc3 = nn.Linear(32, 4)
         self.softmax = nn.Softmax(1)
 
     def forward(self, state):
-        output = self.pool(F.relu(self.conv1(state)))
-        output = self.pool(F.relu(self.conv2(output)))
+        output = F.relu(self.conv1(state))
+        output = F.relu(self.conv2(output))
         output = output.view(output.size(0), -1)
         output = F.relu(self.fc1(output))
         output = F.relu(self.fc2(output))
         output = self.fc3(output)
+        if len(output) == 1:
+            print(output)
         # output = self.softmax(output)
         return output
 
@@ -141,16 +143,17 @@ class DQNAgent(object):
         self.replay_memory.push(current_state, action, reward, next_state, done)
 
     def act(self, state, episode):
-        exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
-        if random.random() < exploration:
-            return Action.get_action(random.randint(0, 3))
+        # exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
+        # if random.random() < exploration:
+        #     return Action.get_action(random.randint(0, 3))
 
         state = np.array([state])
         state = torch.FloatTensor(state).to(device)
         with torch.no_grad():
             output = self.model(state).detach().numpy()
             raw_action = np.argmax(output)
-
+        global env
+        print(env.get_action_meaning( Action.get_action(raw_action)))
         action = Action.get_action(raw_action)
         return action
 
@@ -262,7 +265,9 @@ def calc_reward(info, prev, frame):
     if prev is None:
         return 0
     distance = look(info['x'], info['y'], frame)
-    if distance != 9999999:
+    if prev['status'] != info['status'] and info['status'] == 255:
+        return -500
+    if distance != 9999999 and info['status'] != 2:
         if distance > 0:
             if 'RIGHT' in info['moves']:
                 reward += 100
@@ -276,6 +281,8 @@ def calc_reward(info, prev, frame):
         elif distance == 0:
             if 'UP' in info['moves']:
                 reward += 100
+    if info['status'] == 2 and 'UP' in info['moves']:
+        reward += 100
     return np.interp(reward, [-500, 500], [-1, 1])
 
 
@@ -305,16 +312,26 @@ def look(x, y, frame):
     else:
         return 9999999
 
+
+env = retro.make(game='DonkeyKong-Nes')
+
+
 def main():
+    path = os.path.join(os.getcwd(), "GIFs")
+    if not os.path.exists(path):
+        os.mkdir(path)
     # TRAIN PHASE
     agent = DQNAgent()
     # add_movies(agent)
-    env = retro.make(game='DonkeyKong-Nes')
     agent.set(env)
     rewards_per_episode = []
-    show_render = False
+    show_render = True
     nr_stacks = 1
     for episode in range(1_000):
+        images = []
+        # pozitia de start
+        x_of_best_y = 53
+        best_y = 209
         start_time = time.time()
         print("EPISODE: ", episode)
 
@@ -339,12 +356,17 @@ def main():
                 action = Action.get_action(random.randint(0, 3))
             # action = Action.get_action(1)
             current_frame, reward, done, info = env.step(action)
+            images += [env.render(mode="rgb_array")]
+            # sa nu fie best_y cand sare
+            if info['status'] != 4 and 0 < info['y'] <= best_y:
+                x_of_best_y = info['x']
+                best_y = info['y']
             ac_frame = current_frame.copy()
             current_frame = downscale(current_frame, info['y'], info['x'])
             stacked_frames.append(current_frame)
             info['reward'] = reward
             info['action'] = action
-            info['moves'] =  env.get_action_meaning(action)
+            info['moves'] = env.get_action_meaning(action)
             reward += calc_reward(info, prev, ac_frame)
             # reward = -1000
             actions.append(action)
@@ -373,6 +395,12 @@ def main():
         print("TIME:", time.time() - start_time)
         print("STEPS: ", steps)
         print()
+        # daca macar a ajuns langa prima scara buna, salvez un GIF
+        if best_y <= 205:
+            imageio.mimsave(
+                os.path.join(path, str(x_of_best_y) + ' ' + str(best_y) + ' ' + str(rewards_per_episode[-1]) +
+                             ' ' + datetime.now().strftime("%Y-%m-%d %H-%M-%S") + ".gif"),
+                [np.array(image) for image in images], fps=30)
 
     plot_reward(rewards_per_episode, range(1000))
     # TEST PHASE
