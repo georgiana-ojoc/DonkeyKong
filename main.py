@@ -69,8 +69,8 @@ class ReplayBuffer:
         next_state_batch = []
         done_batch = []
 
-        # batch = random.sample(self.buffer, batch_size)
-        batch = list(self.buffer)[-batch_size:]
+        batch = random.sample(self.buffer, batch_size)
+        #batch = list(self.buffer)[-batch_size:]
 
         for experience in batch:
             state, action, reward, next_state, done = experience
@@ -106,7 +106,7 @@ class Q_Module(nn.Module):
     def forward(self, state):
         output = F.relu(self.conv1(state))
         output = F.relu(self.conv2(output))
-        output = output.view(output.size(0), -1)
+        output = output.view(output.size(0),-1)
         output = F.relu(self.fc1(output))
         output = F.relu(self.fc2(output))
         output = self.fc3(output)
@@ -124,7 +124,8 @@ class DQNAgent(object):
         # Actor and target Actor using Adam optimizer
         self.model = Q_Module().to(device)
         self.target_model = copy.deepcopy(self.model)
-        self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=3e-4)
+        self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=3e-2)
+        self.huber_loss = nn.SmoothL1Loss()
 
         # Replay memory for training
         self.BATCH_SIZE = 10
@@ -175,14 +176,20 @@ class DQNAgent(object):
 
         # Compute Y = r + γ * (1-done) * Q_target(s',a')
         with torch.no_grad():
-            target_q = torch.max(self.target_model(next_state), axis=1)[0]
+            next_q = self.target_model(next_state)
+            predicted_action = torch.argmax(self.model(next_state),axis=1)
+
+            target_q = next_q.gather(1,predicted_action.view(1,self.BATCH_SIZE))[0]
+
             Y = reward.T[0] + self.GAMMA * (1 - done.T[0]) * target_q
 
         # Compute critic loss like the sum of the mean squared error of the current q value
         raw_action = torch.LongTensor(Action.get_action_number(action)).to(device)
         current_q = self.model(current_state).gather(1, raw_action.view(1, self.BATCH_SIZE))[0]
 
-        loss = F.mse_loss(current_q, Y)
+
+        #loss = F.mse_loss(current_q, Y)
+        loss= self.huber_loss(current_q,Y)
         # Update critic model using the previous computed loss
         self.model_optimizer.zero_grad()
         loss.backward()
@@ -235,6 +242,7 @@ def add_movies(agent):
                 current_frame, reward, done, info = environment.step(action)
                 if done:
                     break
+
                 current_frame = downscale(current_frame, info['y'], info['x'])
                 stacked_frames.append(current_frame)
                 info['reward'] = reward
@@ -354,7 +362,7 @@ def main():
                 action = agent.act(stacked_frames[offset], episode)
             else:
                 action = Action.get_action(random.randint(0, 3))
-            # action = Action.get_action(1)
+            action = Action.get_action(1)
             current_frame, reward, done, info = env.step(action)
             images += [env.render(mode="rgb_array")]
             # sa nu fie best_y cand sare
@@ -362,13 +370,14 @@ def main():
                 x_of_best_y = info['x']
                 best_y = info['y']
             ac_frame = current_frame.copy()
+
             current_frame = downscale(current_frame, info['y'], info['x'])
             stacked_frames.append(current_frame)
             info['reward'] = reward
             info['action'] = action
             info['moves'] = env.get_action_meaning(action)
-            reward += calc_reward(info, prev, ac_frame)
-            # reward = -1000
+            #reward += calc_reward(info, prev, ac_frame)
+            reward = -0.4
             actions.append(action)
             rewards.append(reward)
             print(reward, env.get_action_meaning(action))
