@@ -1,10 +1,9 @@
-import retro
-import numpy as np
 import cv2  # For image reduction
-import neat
-import pickle
 import math
-import threading
+import neat
+import numpy as np
+import pickle
+import retro
 
 oned_image = []
 
@@ -81,7 +80,7 @@ def eval_genomes(genomes, config):
                 counter += 1
                 # count the frames until it successful
 
-            # Train mario for max 250 frames
+            # Train for max 250 frames
             if done or counter == 250:
                 done = True
                 print(genome_id, fitness_current)
@@ -103,5 +102,5 @@ p.add_reporter(neat.Checkpointer(10))
 
 winner = p.run(eval_genomes)
 
-with open('winner.pkl', 'wb') as output:
+with open("winner.pkl", "wb") as output:
     pickle.dump(winner, output, 1)

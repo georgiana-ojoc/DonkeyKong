@@ -1,22 +1,21 @@
-import copy
-import os
-import random
-import time
 from collections import deque
 
+import copy
 import cv2
 import keyboard
 import matplotlib.pyplot as plt
 import numpy as np
+import os
+import random
 import retro
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import time
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# TO DO: Nu stiu daca A este chiar [0,0,0,0,0,0,0,0,1] , nu pare sa mearga si trebuie sa verificam daca chiar e asa
 class Action(object):
     def __init__(self, ):
         self.A = [0, 0, 0, 0, 0, 0, 0, 0, 1]
@@ -62,7 +61,6 @@ class Action(object):
         return np.array(actions_number)
 
 
-# aici nu cred ca mai trebuie sa umblam, deci VERIFIED
 class ReplayBuffer:
     def __init__(self, device, maximum_size=1_000_000):
         self.device = device
@@ -100,11 +98,9 @@ class ReplayBuffer:
         return len(self.buffer)
 
 
-# aici putem si cred ca va trebui sa ne jucam cu size-ul layerelor de convolutie
-# numerele 12 si 13 sunt produse de 224/16 si 240/16 rezultate in urma pooling-ului de 4 (efectuat de doua ori)
-class Q_Module(nn.Module):
+class QModule(nn.Module):
     def __init__(self):
-        super(Q_Module, self).__init__()
+        super(QModule, self).__init__()
         self.conv1 = nn.Conv2d(1, 16, 5)
         self.pool = nn.MaxPool2d(3, 3)
         self.conv2 = nn.Conv2d(16, 10, 5)
@@ -124,13 +120,12 @@ class Q_Module(nn.Module):
         return output
 
 
-# Trebuie sa modificam actiunile de output daca dorim sa facemproblema mai mica
 class DQNAgent(object):
     def __init__(self):
         self.env = None
 
         # Actor and target Actor using Adam optimizer
-        self.model = Q_Module().to(device)
+        self.model = QModule().to(device)
         self.target_model = copy.deepcopy(self.model)
         self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=3e-4)
 
@@ -138,6 +133,7 @@ class DQNAgent(object):
         self.BATCH_SIZE = 10
         self.REPLAY_MEMORY_SIZE = 1_000_000
         self.replay_memory = ReplayBuffer(device)
+
         # constants
         self.EPS_MIN = 0.01
         self.EPS_EP = 100
@@ -199,15 +195,15 @@ class DQNAgent(object):
 
 
 def downscale(state, x, y):
-    grayImage = cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
-    max_h, max_w = grayImage.shape
+    gray_image = cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
+    max_h, max_w = gray_image.shape
     h = 50
     w = 75
     y = y if y > h else h
     y = y if y + h < max_h else max_h - h
     x = x if x > w else w
     x = x if x + w < max_w else max_w - w
-    frame = grayImage[y - h:y + h, x - w:x + w]
+    frame = gray_image[y - h:y + h, x - w:x + w]
     height = int(frame.shape[0] / 4)
     width = int(frame.shape[1] / 4)
     frame = cv2.resize(frame, (width, height))
@@ -222,12 +218,10 @@ def add_movies(agent):
             movie.step()
             environment = retro.make(game=movie.get_game(), state=None, use_restricted_actions=retro.Actions.ALL,
                                      players=movie.players)
-
             environment.initial_state = movie.get_state()
             environment.reset()
-
             steps = 0
-            nr_stacks = 4
+            stack_size = 4
             prev = None
             rewards = []
             stacked_frames = []
@@ -246,16 +240,15 @@ def add_movies(agent):
                 stacked_frames.append(current_frame)
                 info['reward'] = reward
                 info['action'] = action
-                reward += 2 * calc_reward(info, prev)
-                # reward = +10
+                reward += 2 * compute_added_reward(info, prev)
                 actions.append(action)
                 rewards.append(reward)
                 # print(reward, environment.get_action_meaning(action))
-                for i in range(1, nr_stacks):
+                for i in range(1, stack_size):
                     if steps - i >= 0:
                         stacked_frames[steps - i] = (np.hstack((stacked_frames[steps - i], current_frame)))
-                if steps > nr_stacks:
-                    offset = steps - (nr_stacks + 1)
+                if steps > stack_size:
+                    offset = steps - (stack_size + 1)
                     # print(stacked_frames[offset].shape, stacked_frames[offset + 1].shape)
                     avg = np.array(rewards[-offset:]).mean()
                     agent.memorize(stacked_frames[0], actions[offset], avg, stacked_frames[1],
@@ -263,11 +256,10 @@ def add_movies(agent):
                 if steps % 10 == 0:
                     agent.train()
                 prev = info
-
             environment.close()
 
 
-def calc_reward(info, prev):
+def compute_added_reward(info, prev):
     reward = 0
     if prev is None:
         return 0
@@ -280,10 +272,8 @@ def calc_reward(info, prev):
             reward += 5
         if info['x'] != prev['x']:
             reward += 10
-
         if info['x'] < 47 or info['x'] > 202:
             reward -= 500
-
     elif prev['status'] != info['status']:
         reward -= 500
     return np.interp(reward, [-500, 500], [-1, 1])
@@ -293,7 +283,7 @@ def main():
     # TRAIN PHASE
     agent = DQNAgent()
     # add_movies(agent)
-    env = retro.make(game='DonkeyKong-Nes')
+    env = retro.make(game="DonkeyKong-Nes")
     agent.set(env)
     rewards_per_episode = []
     show_render = False
@@ -321,14 +311,12 @@ def main():
                 action = agent.act(stacked_frames[offset], episode)
             else:
                 action = Action.get_action(random.randint(0, 6))
-            # action = Action.get_action(1)
             current_frame, reward, done, info = env.step(action)
             current_frame = downscale(current_frame, info['y'], info['x'])
             stacked_frames.append(current_frame)
             info['reward'] = reward
             info['action'] = action
-            reward += calc_reward(info, prev)
-            # reward = -1000
+            reward += compute_added_reward(info, prev)
             actions.append(action)
             rewards.append(reward)
             print(reward, env.get_action_meaning(action))
@@ -373,19 +361,19 @@ def main():
             current_state = next_state
             steps += 1
 
-        print("TOTAL EPISODE REWARD: ", np.array(rewards).sum())
-        print("BEST EPISODE REWARD: ", np.array(rewards).max())
-        print("AVERAGE EPISODE REWARD: ", np.array(rewards).mean())
+        print("TOTAL EPISODE REWARD:", np.array(rewards).sum())
+        print("BEST EPISODE REWARD:", np.array(rewards).max())
+        print("AVERAGE EPISODE REWARD:", np.array(rewards).mean())
         print("TIME:", time.time() - start_time)
-        print("STEPS: ", steps)
+        print("STEPS:", steps)
         print()
 
 
 def plot_reward(rewards, episodes):
     plt.plot(episodes, rewards)
-    plt.xlabel('Episode')
-    plt.ylabel('Reward')
-    plt.title('Reward evolution')
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    plt.title("Reward evolution")
     plt.show()
 
 

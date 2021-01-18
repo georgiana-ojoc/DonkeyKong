@@ -1,20 +1,17 @@
+from collections import deque
+from datetime import datetime
 from positions import get_all_positions
 
-from datetime import datetime
-import imageio
-import numpy
-
 import copy
-import os
-import time
-from collections import deque
-
 import cv2
+import imageio
 import keyboard
 import math
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import retro
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -22,11 +19,9 @@ import torch.nn.functional as F
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(device)
 
-# Aici sunt toate pozitiile fixe utile (scari, scari rupte, ciocane, finish)
 positions = get_all_positions()
 
 
-# TO DO: Nu stiu daca A este chiar [0,0,0,0,0,0,0,0,1] , nu pare sa mearga si trebuie sa verificam daca chiar e asa
 class Action(object):
     def __init__(self, ):
         self.A = [0, 0, 0, 0, 0, 0, 0, 0, 1]
@@ -72,7 +67,6 @@ class Action(object):
         return np.array(actions_number)
 
 
-# aici nu cred ca mai trebuie sa umblam, deci VERIFIED
 class ReplayBuffer:
     def __init__(self, device, maximum_size=1_000_000):
         self.device = device
@@ -110,13 +104,7 @@ class ReplayBuffer:
         return len(self.buffer)
 
 
-# aici putem si cred ca va trebui sa ne jucam cu size-ul layerelor de convolutie
-# numerele 12 si 13 sunt produse de 224/16 si 240/16 rezultate in urma pooling-ului de 4 (efectuat de doua ori)
-
-
 class DuelingDQN(nn.Module):
-    """Convolutional neural network for the Atari games."""
-
     def __init__(self, num_actions):
         super(DuelingDQN, self).__init__()
         self.conv1 = nn.Conv2d(4, 32, kernel_size=8, stride=4)
@@ -142,7 +130,6 @@ class DuelingDQN(nn.Module):
         self.A = nn.Linear(512, num_actions)
 
     def forward(self, states):
-        """Forward pass of the neural network with some inputs."""
         x = F.relu(self.conv1(states))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
@@ -153,9 +140,9 @@ class DuelingDQN(nn.Module):
         return Q
 
 
-class Q_Module(nn.Module):
+class QModule(nn.Module):
     def __init__(self):
-        super(Q_Module, self).__init__()
+        super(QModule, self).__init__()
         self.conv1 = nn.Conv2d(1, 32, kernel_size=6, stride=3)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=2, stride=1)
@@ -167,20 +154,19 @@ class Q_Module(nn.Module):
         output = F.relu(self.conv1(state))
         output = F.relu(self.conv2(output))
         output = F.relu(self.conv3(output))
-        output = F.relu(self.fc1(output.view(output.size(0), -1)))
+        output = F.relu(self.fc1(output.view(output.size(), -1)))
         V = self.V(output)
         A = self.A(output)
         Q = V + (A - A.mean(dim=1, keepdim=True))
         return Q
 
 
-# Trebuie sa modificam actiunile de output daca dorim sa facem problema mai mica
 class DQNAgent(object):
     def __init__(self):
         self.env = None
 
         # Actor and target Actor using Adam optimizer
-        self.model = Q_Module().to(device)
+        self.model = QModule().to(device)
         self.target_model = copy.deepcopy(self.model)
         self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=3e-4)
 
@@ -188,6 +174,7 @@ class DQNAgent(object):
         self.BATCH_SIZE = 10
         self.REPLAY_MEMORY_SIZE = 1_000_000
         self.replay_memory = ReplayBuffer(device)
+
         # constants
         self.EPS_MIN = 0.01
         self.EPS_EP = 100
@@ -248,15 +235,15 @@ class DQNAgent(object):
 
 
 def downscale(state, x, y):
-    grayImage = cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
-    max_h, max_w = grayImage.shape
+    gray_image = cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
+    max_h, max_w = gray_image.shape
     h = 50
     w = 75
     y = y if y > h else h
     y = y if y + h < max_h else max_h - h
     x = x if x > w else w
     x = x if x + w < max_w else max_w - w
-    frame = grayImage[y - h:y + h, x - w:x + w]
+    frame = gray_image[y - h:y + h, x - w:x + w]
     height = int(frame.shape[0] / 4)
     width = int(frame.shape[1] / 4)
     frame = cv2.resize(frame, (width, height))
@@ -274,14 +261,10 @@ def add_movies(agent):
             movie.step()
             environment = retro.make(game=movie.get_game(), state=None, use_restricted_actions=retro.Actions.ALL,
                                      players=movie.players)
-
             environment.initial_state = movie.get_state()
-
             current_frame = environment.reset()
             current_frame = downscale(current_frame, 0, 0)
-
             steps = 0
-            nr_stacks = 4
             prev = None
             while movie.step():
                 steps += 1
@@ -289,29 +272,24 @@ def add_movies(agent):
                 for player in range(movie.players):
                     for index in range(environment.num_buttons):
                         action.append(movie.get_key(index, player))
-                # action = Action.get_action(Action.get_action_number(torch.FloatTensor([action])))
                 next_frame, reward, done, info = environment.step(action)
                 # environment.render()
                 if done:
                     break
                 next_frame = downscale(next_frame, info['y'], info['x'])
-                info['reward'] = reward
-                info['action'] = action
-                added_reward = calc_reward(info, prev, movie=True)
+                info["reward"] = reward
+                info["action"] = action
+                added_reward = compute_added_reward(info, prev, movie=True)
                 reward += 2 * added_reward
                 agent.memorize(current_frame, action, reward, next_frame, done)
-
                 if steps % 10 == 0:
                     agent.train()
-
                 prev = info
                 current_frame = next_frame
-
             environment.close()
-            # movie.close()
 
 
-def calc_reward(info, prev, movie=False):
+def compute_added_reward(info, prev, movie=False):
     if movie:
         left = 14
         right = 213
@@ -321,46 +299,35 @@ def calc_reward(info, prev, movie=False):
     reward = 0
     if info['x'] + info['y'] == 0 or prev is None:
         return 0
-    if info['status'] != 255:  # Cat timp e in viata
-        # # scad din reward daca sta in fata unei scari rupte, ca dupa poate pleaca de langa ea
-        # # ar putea astepta aici dintr-un motiv intemeiat, dar macar de test
-        # if info['x'] == prev['x'] and info['y'] == prev['y']:
-        #     # la pozitia de start sau in stanga ei
-        #     if info['y'] == 209 and info['x'] <= 53:
-        #         reward -= 500
-        #     else:
-        #         for ladder in positions["broken_ladders"]:
-        #             if ladder['x'] - 1 <= info['x'] <= ladder['x'] + 1 and ladder['y'] - 1 <= info['y'] <= ladder['y'] + 1:
-        #                 reward -= 50
-        #                 break
+    if info["status"] != 255:
+        if info['x'] == prev['x'] and info['y'] == prev['y']:
+            for ladder in positions["broken_ladders"]:
+                if ladder['x'] - 1 <= info['x'] <= ladder['x'] + 1 and ladder['y'] - 1 <= info['y'] <= ladder['y'] + 1:
+                    reward -= 50
+                    break
         if info["y"] != prev['y']:
-            # button fiindca status-ul nu se schimba imediat :D
-            if info['button'] == 8:  # Urca scara
+            if info["button"] == 8:  # Urca scara
                 if info['y'] < prev['y']:
                     reward += 100
             reward += 50
         if info['x'] != prev['x']:
             reward += 10
-            # # reward mare daca a ajuns la finish
-            # finish = positions["finish"][0]
-            # if finish['x'] - 1 <= info['x'] <= finish['x'] + 1 and finish['y'] - 1 <= info['y'] <= finish['y'] + 1:
-            #     reward += 500
-            #     return reward
-            # # inca putin reward daca a ajuns in fata unei scari, ca dupa poate face UP
-            # for ladder in positions["ladders"]:
-            #     if ladder['x'] - 1 <= info['x'] <= ladder['x'] + 1 and ladder['y'] - 1 <= info['y'] <= ladder['y'] + 1:
-            #         reward += 50
-            #         break
-            # # inca putin reward daca a ajuns sub un ciocan, ca dupa poate sare
-            # for ladder in positions["hammers"]:
-            #     if ladder['x'] - 1 <= info['x'] <= ladder['x'] + 1 and ladder['y'] - 1 <= info['y'] <= ladder['y'] + 1:
-            #         reward += 50
-            #         break
-        # la stanga pozitiei de start
-        # 30 ca poate, poate ia un ciocan :))
-        elif (info['y'] == 209 and info['x'] < 53) or (info['x'] < left or info['x'] > right):
+            finish = positions["finish"][0]
+            if finish['x'] - 1 <= info['x'] <= finish['x'] + 1 and finish['y'] - 1 <= info['y'] <= finish['y'] + 1:
+                reward += 500
+                return reward
+            for ladder in positions["ladders"]:
+                if ladder['x'] - 1 <= info['x'] <= ladder['x'] + 1 and ladder['y'] - 1 <= info['y'] <= ladder['y'] + 1:
+                    reward += 50
+                    break
+            for ladder in positions["hammers"]:
+                if ladder['x'] - 1 <= info['x'] <= ladder['x'] + 1 and ladder['y'] - 1 <= info['y'] <= ladder['y'] + 1:
+                    reward += 50
+                    break
+        elif (info['y'] == positions["start"][0]['y'] and info['x'] <
+              positions["start"][0]['x']) or (info['x'] < left or info['x'] > right):
             reward -= 500
-    elif prev['status'] != info['status']:
+    elif prev["status"] != info["status"]:
         reward -= 50
     return reward
 
@@ -373,24 +340,20 @@ def main():
     # TRAIN PHASE
     agent = DQNAgent()
     add_movies(agent)
-    env = retro.make(game='DonkeyKong-Nes')
+    env = retro.make(game="DonkeyKong-Nes")
     agent.set(env)
     rewards_per_episode = []
     show_render = False
-    nr_stacks = 4
     for episode in range(1_000):
         start_time = time.time()
         print("EPISODE: ", episode)
 
         images = []
-        # pozitia de start
-        x_of_best_y = 53
-        best_y = 209
+        best_x = positions["start"][0]['x']
+        best_y = positions["start"][0]['y']
 
         current_state = env.reset()
         current_state = downscale(current_state, 0, 0)
-
-        print(current_state.shape)
 
         steps = 0
         done = False
@@ -412,14 +375,13 @@ def main():
             next_state = downscale(next_state, info['y'], info['x'])
 
             images += [env.render(mode="rgb_array")]
-            # sa nu fie best_y cand sare
             if info['status'] != 4 and 0 < info['y'] <= best_y:
-                x_of_best_y = info['x']
+                best_x = info['x']
                 best_y = info['y']
 
             info['reward'] = reward
             info['action'] = action
-            reward += calc_reward(info, prev)
+            reward += compute_added_reward(info, prev)
             actions.append(action)
             rewards.append(reward)
             # print(reward, env.get_action_meaning(action))
@@ -440,12 +402,11 @@ def main():
         print("STEPS: ", steps)
         print()
 
-        # daca macar a ajuns langa prima scara buna, salvez un GIF
         if best_y <= 205:
-            imageio.mimsave(
-                os.path.join(path, str(x_of_best_y) + ' ' + str(best_y) + ' ' + str(rewards_per_episode[-1]) +
-                             ' ' + datetime.now().strftime("%Y-%m-%d %H-%M-%S") + ".gif"),
-                [numpy.array(image) for image in images], fps=30)
+            imageio.mimsave(os.path.join(path, str(best_y) + ' ' + str(best_x) + ' ' +
+                                         str(int(rewards_per_episode[-1])) + ' ' +
+                                         datetime.now().strftime("%Y-%m-%d %H-%M-%S") + ".gif"),
+                            [np.array(image) for image in images], fps=30)
 
     # plot_reward(rewards_per_episode, range(1000))
     # TEST PHASE
@@ -464,19 +425,19 @@ def main():
             current_state = next_state
             steps += 1
 
-        print("TOTAL EPISODE REWARD: ", np.array(rewards).sum())
-        print("BEST EPISODE REWARD: ", np.array(rewards).max())
-        print("AVERAGE EPISODE REWARD: ", np.array(rewards).mean())
+        print("TOTAL EPISODE REWARD:", np.array(rewards).sum())
+        print("BEST EPISODE REWARD:", np.array(rewards).max())
+        print("AVERAGE EPISODE REWARD:", np.array(rewards).mean())
         print("TIME:", time.time() - start_time)
-        print("STEPS: ", steps)
+        print("STEPS:", steps)
         print()
 
 
 def plot_reward(rewards, episodes):
     plt.plot(episodes, rewards)
-    plt.xlabel('Episode')
-    plt.ylabel('Reward')
-    plt.title('Reward evolution')
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    plt.title("Reward evolution")
     plt.show()
 
 
