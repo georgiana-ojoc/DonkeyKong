@@ -1,7 +1,9 @@
 from collections import deque
+from datetime import datetime
 
 import copy
 import cv2
+import imageio
 import keyboard
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,17 +23,13 @@ class Action(object):
         self.A = [0, 0, 0, 0, 0, 0, 0, 0, 1]
         self.RIGHT = [0, 0, 0, 0, 0, 0, 0, 1, 0]
         self.LEFT = [0, 0, 0, 0, 0, 0, 1, 0, 0]
-        self.DOWN = [0, 0, 0, 0, 0, 1, 0, 0, 0]
         self.UP = [0, 0, 0, 0, 1, 0, 0, 0, 0]
-        self.B = [1, 0, 0, 0, 0, 0, 0, 0, 0]
 
     def get_action(action_number):
         A = np.array([0, 0, 0, 0, 0, 0, 0, 0, 1])
         RIGHT = np.array([0, 0, 0, 0, 0, 0, 0, 1, 0])
         LEFT = np.array([0, 0, 0, 0, 0, 0, 1, 0, 0])
-        DOWN = np.array([0, 0, 0, 0, 0, 1, 0, 0, 0])
         UP = np.array([0, 0, 0, 0, 1, 0, 0, 0, 0])
-        B = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0])
 
         if action_number == 0:
             return A
@@ -40,23 +38,15 @@ class Action(object):
         elif action_number == 2:
             return LEFT
         elif action_number == 3:
-            return DOWN
-        elif action_number == 4:
             return UP
-        elif action_number == 5:
-            return B
-        elif action_number == 6:
-            return np.array([0, 0, 0, 0, 0, 0, 0, 0, 0])
 
     def get_action_number(actions):
         actions_number = []
         for action in actions:
             action = action.detach().numpy()[::-1]
             index = np.argmax(action)
-            if action.tolist() == [0, 0, 0, 0, 0, 0, 0, 0, 0]:
-                index = 6
-            elif action.tolist() == [0, 0, 0, 0, 0, 0, 0, 0, 1]:
-                index = 5
+            if action.tolist() == [0, 0, 0, 0, 1, 0, 0, 0, 0]:
+                index = 3
             actions_number += [index]
         return np.array(actions_number)
 
@@ -77,8 +67,8 @@ class ReplayBuffer:
         next_state_batch = []
         done_batch = []
 
-        # batch = random.sample(self.buffer, batch_size)
-        batch = list(self.buffer)[-batch_size:]
+        batch = random.sample(self.buffer, batch_size)
+        #batch = list(self.buffer)[-batch_size:]
 
         for experience in batch:
             state, action, reward, next_state, done = experience
@@ -104,15 +94,15 @@ class QModule(nn.Module):
         self.conv1 = nn.Conv2d(1, 16, 5)
         self.pool = nn.MaxPool2d(3, 3)
         self.conv2 = nn.Conv2d(16, 10, 5)
-        self.fc1 = nn.Linear(180, 200)
+        self.fc1 = nn.Linear(4_930, 200)
         self.fc2 = nn.Linear(200, 32)
-        self.fc3 = nn.Linear(32, 7)
+        self.fc3 = nn.Linear(32, 4)
         self.softmax = nn.Softmax(1)
 
     def forward(self, state):
-        output = self.pool(F.relu(self.conv1(state)))
-        output = self.pool(F.relu(self.conv2(output)))
-        output = output.view(-1, 180)
+        output = F.relu(self.conv1(state))
+        output = F.relu(self.conv2(output))
+        output = output.view(output.size(0),-1)
         output = F.relu(self.fc1(output))
         output = F.relu(self.fc2(output))
         output = self.fc3(output)
@@ -127,7 +117,8 @@ class DQNAgent(object):
         # Actor and target Actor using Adam optimizer
         self.model = QModule().to(device)
         self.target_model = copy.deepcopy(self.model)
-        self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=3e-4)
+        self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=3e-2)
+        self.huber_loss = nn.SmoothL1Loss()
 
         # Replay memory for training
         self.BATCH_SIZE = 10
@@ -147,16 +138,15 @@ class DQNAgent(object):
         self.replay_memory.push(current_state, action, reward, next_state, done)
 
     def act(self, state, episode):
-        exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
-        if random.random() < exploration:
-            return Action.get_action(random.randint(0, 6))
+        # exploration = max((self.EPS_MIN - 1) / 10 * episode + 1, self.EPS_MIN)
+        # if random.random() < exploration:
+        #     return Action.get_action(random.randint(0, 3))
 
         state = np.array([state])
         state = torch.FloatTensor(state).to(device)
         with torch.no_grad():
             output = self.model(state).detach().numpy()
             raw_action = np.argmax(output)
-
         action = Action.get_action(raw_action)
         return action
 
@@ -178,14 +168,20 @@ class DQNAgent(object):
 
         # Compute Y = r + γ * (1-done) * Q_target(s',a')
         with torch.no_grad():
-            target_q = torch.max(self.target_model(next_state), axis=1)[0]
+            next_q = self.target_model(next_state)
+            predicted_action = torch.argmax(self.model(next_state),axis=1)
+
+            target_q = next_q.gather(1,predicted_action.view(1,self.BATCH_SIZE))[0]
+
             Y = reward.T[0] + self.GAMMA * (1 - done.T[0]) * target_q
 
         # Compute critic loss like the sum of the mean squared error of the current q value
         raw_action = torch.LongTensor(Action.get_action_number(action)).to(device)
         current_q = self.model(current_state).gather(1, raw_action.view(1, self.BATCH_SIZE))[0]
 
-        loss = F.mse_loss(current_q, Y)
+
+        #loss = F.mse_loss(current_q, Y)
+        loss= self.huber_loss(current_q,Y)
         # Update critic model using the previous computed loss
         self.model_optimizer.zero_grad()
         loss.backward()
@@ -259,36 +255,79 @@ def add_movies(agent):
             environment.close()
 
 
-def compute_added_reward(info, prev):
+def compute_added_reward(info, prev, frame):
     reward = 0
     if prev is None:
         return 0
-    reward += info['reward']
-    if info['status'] != 255:  # Cat timp e in viata
-        if info["y"] != prev['y']:
-            if info['status'] == 2:  # Urca scara
-                if info["y"] < prev['y']:
-                    reward += 10
-            reward += 5
-        if info['x'] != prev['x']:
-            reward += 10
-        if info['x'] < 47 or info['x'] > 202:
-            reward -= 500
-    elif prev['status'] != info['status']:
-        reward -= 500
+    distance = look(info['x'], info['y'], frame)
+    if prev["status"] != info["status"] and info["status"] == 255:
+        return -500
+    if distance != 9999999 and info["status"] != 2:
+        if distance > 0:
+            if 'RIGHT' in info["moves"]:
+                reward += 100
+            else:
+                reward -= 200
+        elif distance < 0:
+            if "LEFT" in info["moves"]:
+                reward += 100
+            else:
+                reward -= 200
+        elif distance == 0:
+            if "UP" in info["moves"]:
+                reward += 100
+    if info["status"] == 2 and "UP" in info["moves"]:
+        reward += 100
     return np.interp(reward, [-500, 500], [-1, 1])
 
 
+def look(x, y, frame):
+    divide = 4
+    copy_frame = frame.copy()
+    copy_frame = cv2.cvtColor(copy_frame, cv2.COLOR_BGR2GRAY)
+    sh_x = copy_frame.shape[1]
+    sh_y = copy_frame.shape[0]
+    copy_frame = cv2.resize(copy_frame, (int(sh_y / divide), int(sh_x / divide)))
+    x = int(x / divide)
+    y = int(y / divide)
+    right = copy_frame[y + 1, x:copy_frame.shape[1]]
+    left = copy_frame[y + 1, 0:x]
+    left = left[::-1]
+    distance_right = 9999999
+    158 in right
+    if (158 in right) or (159 in right):
+        distance_right = max(np.argmax(right == 158), np.argmax(right == 159))
+    distance_left = 9999999
+    if 158 in left or 159 in left:
+        distance_left = max(np.argmax(left == 158), np.argmax(left == 159))
+    if distance_right < distance_left:
+        return distance_right
+    elif distance_right > distance_left:
+        return -distance_left
+    else:
+        return 9999999
+
+
+
+
+
 def main():
+    path = os.path.join(os.getcwd(), "GIFs")
+    if not os.path.exists(path):
+        os.mkdir(path)
     # TRAIN PHASE
     agent = DQNAgent()
     # add_movies(agent)
     env = retro.make(game="DonkeyKong-Nes")
     agent.set(env)
     rewards_per_episode = []
-    show_render = False
-    nr_stacks = 4
+    show_render = True
+    nr_stacks = 1
     for episode in range(1_000):
+        images = []
+        # pozitia de start
+        x_of_best_y = 53
+        best_y = 209
         start_time = time.time()
         print("EPISODE: ", episode)
 
@@ -306,12 +345,19 @@ def main():
                 show_render = ~ show_render
             if show_render:
                 env.render()
-            if steps > nr_stacks:
+            if steps >= nr_stacks:
                 offset = steps - nr_stacks
                 action = agent.act(stacked_frames[offset], episode)
             else:
                 action = Action.get_action(random.randint(0, 6))
             current_frame, reward, done, info = env.step(action)
+            images += [env.render(mode="rgb_array")]
+            # sa nu fie best_y cand sare
+            if info['status'] != 4 and 0 < info['y'] <= best_y:
+                x_of_best_y = info['x']
+                best_y = info['y']
+            ac_frame = current_frame.copy()
+
             current_frame = downscale(current_frame, info['y'], info['x'])
             stacked_frames.append(current_frame)
             info['reward'] = reward
@@ -343,6 +389,12 @@ def main():
         print("TIME:", time.time() - start_time)
         print("STEPS: ", steps)
         print()
+        # daca macar a ajuns langa prima scara buna, salvez un GIF
+        if best_y <= 205:
+            imageio.mimsave(
+                os.path.join(path, str(x_of_best_y) + ' ' + str(best_y) + ' ' + str(rewards_per_episode[-1]) +
+                             ' ' + datetime.now().strftime("%Y-%m-%d %H-%M-%S") + ".gif"),
+                [np.array(image) for image in images], fps=30)
 
     plot_reward(rewards_per_episode, range(1000))
     # TEST PHASE
