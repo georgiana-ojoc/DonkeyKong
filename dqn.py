@@ -1,5 +1,6 @@
 from collections import deque
 from datetime import datetime
+from positions import get_all_positions
 
 import copy
 import cv2
@@ -16,6 +17,9 @@ import torch.nn.functional as F
 import time
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
+
+positions = get_all_positions()
 
 
 class Action(object):
@@ -68,7 +72,7 @@ class ReplayBuffer:
         done_batch = []
 
         batch = random.sample(self.buffer, batch_size)
-        #batch = list(self.buffer)[-batch_size:]
+        # batch = list(self.buffer)[-batch_size:]
 
         for experience in batch:
             state, action, reward, next_state, done = experience
@@ -102,7 +106,7 @@ class QModule(nn.Module):
     def forward(self, state):
         output = F.relu(self.conv1(state))
         output = F.relu(self.conv2(output))
-        output = output.view(output.size(0),-1)
+        output = output.view(output.size(0), -1)
         output = F.relu(self.fc1(output))
         output = F.relu(self.fc2(output))
         output = self.fc3(output)
@@ -169,9 +173,9 @@ class DQNAgent(object):
         # Compute Y = r + γ * (1-done) * Q_target(s',a')
         with torch.no_grad():
             next_q = self.target_model(next_state)
-            predicted_action = torch.argmax(self.model(next_state),axis=1)
+            predicted_action = torch.argmax(self.model(next_state), axis=1)
 
-            target_q = next_q.gather(1,predicted_action.view(1,self.BATCH_SIZE))[0]
+            target_q = next_q.gather(1, predicted_action.view(1, self.BATCH_SIZE))[0]
 
             Y = reward.T[0] + self.GAMMA * (1 - done.T[0]) * target_q
 
@@ -179,9 +183,8 @@ class DQNAgent(object):
         raw_action = torch.LongTensor(Action.get_action_number(action)).to(device)
         current_q = self.model(current_state).gather(1, raw_action.view(1, self.BATCH_SIZE))[0]
 
-
-        #loss = F.mse_loss(current_q, Y)
-        loss= self.huber_loss(current_q,Y)
+        # loss = F.mse_loss(current_q, Y)
+        loss = self.huber_loss(current_q, Y)
         # Update critic model using the previous computed loss
         self.model_optimizer.zero_grad()
         loss.backward()
@@ -228,7 +231,6 @@ def add_movies(agent):
                 for player in range(movie.players):
                     for index in range(environment.num_buttons):
                         action.append(movie.get_key(index, player))
-                action = Action.get_action(Action.get_action_number(torch.FloatTensor([action])))
                 current_frame, reward, done, info = environment.step(action)
                 if done:
                     break
@@ -308,9 +310,6 @@ def look(x, y, frame):
         return 9999999
 
 
-
-
-
 def main():
     path = os.path.join(os.getcwd(), "GIFs")
     if not os.path.exists(path):
@@ -322,12 +321,12 @@ def main():
     agent.set(env)
     rewards_per_episode = []
     show_render = True
-    nr_stacks = 1
+    stack_size = 1
     for episode in range(1_000):
         images = []
-        # pozitia de start
-        x_of_best_y = 53
-        best_y = 209
+        best_x = positions["start"][0]['x']
+        best_y = positions["start"][0]['y']
+
         start_time = time.time()
         print("EPISODE: ", episode)
 
@@ -339,38 +338,38 @@ def main():
         stacked_frames = []
         actions = []
         while not done:
-            if keyboard.is_pressed('f12'):
-                while keyboard.is_pressed('f12'):
+            if keyboard.is_pressed("f12"):
+                while keyboard.is_pressed("f12"):
                     pass
                 show_render = ~ show_render
             if show_render:
                 env.render()
-            if steps >= nr_stacks:
-                offset = steps - nr_stacks
+            if steps >= stack_size:
+                offset = steps - stack_size
                 action = agent.act(stacked_frames[offset], episode)
             else:
                 action = Action.get_action(random.randint(0, 6))
             current_frame, reward, done, info = env.step(action)
+
+            reward += compute_added_reward(info, prev, current_frame)
+
             images += [env.render(mode="rgb_array")]
-            # sa nu fie best_y cand sare
-            if info['status'] != 4 and 0 < info['y'] <= best_y:
-                x_of_best_y = info['x']
+            if info["status"] != 4 and 0 < info['y'] <= best_y:
+                best_x = info['x']
                 best_y = info['y']
-            ac_frame = current_frame.copy()
 
             current_frame = downscale(current_frame, info['y'], info['x'])
             stacked_frames.append(current_frame)
-            info['reward'] = reward
-            info['action'] = action
-            reward += compute_added_reward(info, prev)
+            info["reward"] = reward
+            info["action"] = action
             actions.append(action)
             rewards.append(reward)
-            print(reward, env.get_action_meaning(action))
-            for i in range(1, nr_stacks):
+            # print(reward, env.get_action_meaning(action))
+            for i in range(1, stack_size):
                 if steps - i >= 0:
                     stacked_frames[steps - i] = (np.hstack((stacked_frames[steps - i], current_frame)))
-            if steps > nr_stacks:
-                offset = steps - (nr_stacks + 1)
+            if steps > stack_size:
+                offset = steps - (stack_size + 1)
                 # print(stacked_frames[offset].shape, stacked_frames[offset + 1].shape)
                 avg = np.array(rewards[-offset:]).mean()
                 agent.memorize(stacked_frames[offset], actions[offset], avg, stacked_frames[offset + 1],
@@ -389,12 +388,12 @@ def main():
         print("TIME:", time.time() - start_time)
         print("STEPS: ", steps)
         print()
-        # daca macar a ajuns langa prima scara buna, salvez un GIF
+
         if best_y <= 205:
-            imageio.mimsave(
-                os.path.join(path, str(x_of_best_y) + ' ' + str(best_y) + ' ' + str(rewards_per_episode[-1]) +
-                             ' ' + datetime.now().strftime("%Y-%m-%d %H-%M-%S") + ".gif"),
-                [np.array(image) for image in images], fps=30)
+            imageio.mimsave(os.path.join(path, str(best_y) + ' ' + str(best_x) + ' ' +
+                                         str(int(rewards_per_episode[-1])) + ' ' +
+                                         datetime.now().strftime("%Y-%m-%d %H-%M-%S") + ".gif"),
+                            [np.array(image) for image in images], fps=30)
 
     plot_reward(rewards_per_episode, range(1000))
     # TEST PHASE

@@ -362,8 +362,8 @@ def main():
         actions = []
 
         while not done:
-            if keyboard.is_pressed('f12'):
-                while keyboard.is_pressed('f12'):
+            if keyboard.is_pressed("f12"):
+                while keyboard.is_pressed("f12"):
                     pass
                 show_render = ~ show_render
             if show_render:
@@ -379,8 +379,8 @@ def main():
                 best_x = info['x']
                 best_y = info['y']
 
-            info['reward'] = reward
-            info['action'] = action
+            info["reward"] = reward
+            info["action"] = action
             reward += compute_added_reward(info, prev)
             actions.append(action)
             rewards.append(reward)

@@ -12,13 +12,15 @@ def calc_reward(info, prevs):
     rew = 0
     if info['y'] != 0 and info['min_y'] > info['y']:
         rew += (info['min_y'] - info['y']) * 5
-    return  (1.0/(distance_to_finish(info['x'],info['y'])+0.00000001))  * 10 +rew
+    return (1.0 / (distance_to_finish(info['x'], info['y']) + 0.00000001)) * 10 + rew
 
-def distance_to_finish(x,y):
-    jumpman_position = np.array((x,y))
-    finish = np.array((145,33))
 
-    return np.linalg.norm(jumpman_position-finish)
+def distance_to_finish(x, y):
+    jumpman_position = np.array((x, y))
+    finish = np.array((145, 33))
+
+    return np.linalg.norm(jumpman_position - finish)
+
 
 def downscale(state, x, y):
     grayImage = np.array(cv2.cvtColor(state, cv2.COLOR_BGR2GRAY))
