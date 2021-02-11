@@ -38,7 +38,7 @@ class QModule(nn.Module):
         return q
 
 
-class DuellingQModule(nn.Module):
+class DuelingQModule(nn.Module):
     def __init__(self, num_actions):
         super(DuellingQModule, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=4, out_channels=32, kernel_size=8, stride=4)
