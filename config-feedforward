@@ -38,7 +38,7 @@ enabled_default         = True
 enabled_mutate_rate     = 0.2
 
 feed_forward            = False
-#initial_connection      = unconnected
+#initial_connection     = unconnected
 initial_connection      = partial_nodirect 0.5
 
 # node add/remove rates
@@ -79,5 +79,3 @@ species_elitism      = 0
 [DefaultReproduction]
 elitism            = 1
 survival_threshold = 0.3
-
-
